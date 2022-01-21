@@ -4,14 +4,6 @@ Offline SSVEP-based BCI Multiclass Prediction
 ====================================================================
 """
 
-# generic import
-import os
-import numpy as np
-
-# mne import
-from mne import get_config, set_config, find_events, read_events, create_info, Epochs
-from mne.io import Raw, RawArray
-
 # pyriemann import
 from pyriemann.estimation import Covariances
 from pyriemann.tangentspace import TangentSpace
@@ -20,13 +12,11 @@ from pyriemann.tangentspace import TangentSpace
 from sklearn.pipeline import make_pipeline
 from sklearn.linear_model import LogisticRegression
 
-import moabb
 from moabb.datasets import SSVEPExo
 from moabb.evaluations import CrossSubjectEvaluation
-from moabb.paradigms import SSVEP, FilterBankSSVEP
-from moabb.pipelines import SSVEP_CCA, ExtendedSSVEPSignal
+from moabb.paradigms import FilterBankSSVEP
+from moabb.pipelines import ExtendedSSVEPSignal
 
-import time
 
 dataset = SSVEPExo()
 interval = dataset.interval
@@ -52,4 +42,4 @@ evaluation_fb = CrossSubjectEvaluation(
 )
 results_fb = evaluation_fb.process(pipelines_fb)
 
-print(results_fb['score'])
+print(results_fb["score"])
