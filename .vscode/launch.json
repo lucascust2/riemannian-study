@@ -12,6 +12,7 @@
             "program":"${file}",
             //"code": "",
             "auto": true,
+            "console": "internalConsole",
         },
     ]
 }

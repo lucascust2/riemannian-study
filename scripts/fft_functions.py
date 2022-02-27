@@ -2,6 +2,7 @@ from unittest import result
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import glob
 
 from mne import read_events
 from mne.io import Raw
@@ -29,10 +30,10 @@ CHANNELS = {
     7: "PO8",
 }
 
-
 def get_subject_data(subject: int = 12, run: int= 5):
-    raw_path = f'/home/lucas-c/workspace/databases/ssvep_exo/subject{subject}_run{run}_raw.fif'
-    events_path =f'/home/lucas-c/workspace/databases/ssvep_exo/subject{subject}_run{run}_eve.fif'
+    subject_str = "0"+str(subject) if subject < 10 else str(subject)
+    raw_path = f'/home/lucas-c/workspace/databases/ssvep_exo/subject{subject_str}_run{run}_raw.fif'
+    events_path =f'/home/lucas-c/workspace/databases/ssvep_exo/subject{subject_str}_run{run}_eve.fif'
 
     raw = Raw(raw_path, preload=True, verbose=False)
     events = pd.DataFrame(read_events(events_path), columns=["sample", "junk", "label"])
@@ -84,11 +85,11 @@ def estimate_epoch_result(epoch_data, filtered = True):
         else:
             data = epoch_data
 
-        freqs = abs(fftfreq(len(epoch_data), 1/SAMPLE_RATE))
-        fft_epoch_data = abs(fft(epoch_data))/len(epoch_data)
+        freqs = abs(fftfreq(len(data), 1/SAMPLE_RATE))
+        fft_data = abs(fft(data))/len(data)
 
-        freq_index = np.where(freqs == freq)[0][0]
-        magnitude = fft_epoch_data[freq_index]
+        freq_idx = (np.abs(freqs - freq)).argmin()
+        magnitude = max(fft_data[freq_idx - 2 : freq_idx + 2])
 
         if magnitude > max_mag:
             max_mag = magnitude
@@ -97,7 +98,7 @@ def estimate_epoch_result(epoch_data, filtered = True):
     return result
 
 
-def fft_predict(subject=12, run=5, *, filtered = True) -> None:
+def fft_predict(subject=12, run=5, *, filtered = True, compare_to="result"):
 
     record_data, events = get_subject_data(subject, run)
 
@@ -110,11 +111,24 @@ def fft_predict(subject=12, run=5, *, filtered = True) -> None:
     for i, channel in CHANNELS.items():
         channel_data = record_data[i]
         for sample in results.index:
-            epoch_data = detrend(channel_data[sample: sample + step])
-            results.loc[sample, channel] = estimate_epoch_result(epoch_data)
-    
+            try:
+                epoch_data = detrend(channel_data[sample: sample + step])
+                results.loc[sample, channel] = estimate_epoch_result(epoch_data, filtered)
+            except:
+                results.loc[sample, channel] = np.nan
+        
     results["result"] = results.mode(axis=1)[0]
-    print("accuracy:", 100 * sum(results["label"] == results["result"])/len(results))
+    results = results.drop(results[results["label"] == 4].index).dropna()
+    return 100 * sum(results["label"] == results[compare_to])/len(results)
 
+def fft_subject_predict(subject):
+    subject_str = "0"+str(subject) if subject < 10 else str(subject)
+    path = f'/home/lucas-c/workspace/databases/ssvep_exo/subject{subject_str}_**'
+    n_records = len(glob.glob(path))//2
+    scores = []
+    for run in range(1, n_records+1):
+        scores.append(fft_predict(subject, run))
+    print(f"accuracy: {round(np.mean(scores), 2)}%")
+    print(f"std error: {round(np.std(scores, ddof=1) / np.sqrt(np.size(scores)),2)}")
 
-
+    
