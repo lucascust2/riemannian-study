@@ -121,14 +121,18 @@ def fft_predict(subject=12, run=5, *, filtered = True, compare_to="result"):
     results = results.drop(results[results["label"] == 4].index).dropna()
     return 100 * sum(results["label"] == results[compare_to])/len(results)
 
-def fft_subject_predict(subject):
+def fft_subject_predict(subject, filtered=True):
     subject_str = "0"+str(subject) if subject < 10 else str(subject)
     path = f'/home/lucas-c/workspace/databases/ssvep_exo/subject{subject_str}_**'
     n_records = len(glob.glob(path))//2
     scores = []
     for run in range(1, n_records+1):
-        scores.append(fft_predict(subject, run))
-    print(f"accuracy: {round(np.mean(scores), 2)}%")
-    print(f"std error: {round(np.std(scores, ddof=1) / np.sqrt(np.size(scores)),2)}")
+        scores.append(fft_predict(subject, run, filtered=filtered))
+
+    score = round(np.mean(scores), 2)
+    error = round(np.std(scores, ddof=1) / np.sqrt(np.size(scores)),2)
+    return score, error
+    # print(f"accuracy: {}%")
+    # print(f"std error: {}")
 
     
