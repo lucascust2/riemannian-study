@@ -1,90 +1,109 @@
-'''
-This document classificates SSVEP Signal using:
-MNE Objects (Raw, Epoch)
-SciKit-learn Pipeline of
- - Covariances matrix transform -> Tangent Space fit -> Logistic Regression
+"""
+This file classify SSVEP through MOABB library 
+Compares CCA method with Riemann Geometry + Logistic Regression
 
-This File do:
-- MNE pure filter 
-- Save model with pickle
-- Predict all samples (not only trials)
-
-This file do not:
-- Separe Train and Test data
-- Separe frequencies to filter
-'''
-
-
-# Import the necessary libraries
-import numpy as np
-import matplotlib.pyplot as plt
-
-# mne import
-from mne import Epochs, find_events, read_events, pick_types
-from mne.io import Raw, RawArray
-
-# pyriemann import
-from pyriemann.estimation import Covariances
-from pyriemann.tangentspace import TangentSpace
-from pyriemann.utils.viz import plot_confusion_matrix
-# cross validation
+This file do:
+- Uses more than one subject
+- Uses SciKit pipeline, passing 'RG + LogReg' param (Riemann Geometry + Logistic Regression)
+--- Pipeline of (MOABB) ExtendedSSVEPSignal -> (pyRi) Covariances -> pyRi TangentSpace -> (sklearn) LogisticRegression
+- Uses SciKit pipeline, passing 'CCA' param 
+--- pass only (MOABB) SSVEP_CCA
+- Uses (MOABB) CrossSubjectEvaluation to evaluate results
+"""
 
 from sklearn.pipeline import make_pipeline
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import KFold
 
-# lib to save the trained model
-import pickle
+from pyriemann.tangentspace import TangentSpace
+from pyriemann.estimation import Covariances
 
-# Get the dataset with the data to reproduce the real time acquisition of brain data - Pass the data for a RAW variable
-raw_fname = './data/record-[2012.07.19-11.24.02]_raw.fif'
-raw = Raw(raw_fname, preload=True, verbose=False)
+from moabb.evaluations import CrossSubjectEvaluation
+from moabb.paradigms import SSVEP, FilterBankSSVEP
+from moabb.datasets import SSVEPExo
+from moabb.pipelines import SSVEP_CCA, ExtendedSSVEPSignal
+import moabb
 
-# replace baselining with high-pass
-raw.filter(2, None, method='iir') 
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+import warnings
 
-# find events and generate epochs
-event_fname = './data/record-[2014.03.10-19.17.37]-eve.fif'
-events = read_events(event_fname)
-event_id = {'13 Hz': 2, '17 Hz': 4, '21 Hz': 3, 'resting-state': 1}
+warnings.simplefilter(action='ignore', category=FutureWarning)
+warnings.simplefilter(action='ignore', category=RuntimeWarning)
+moabb.set_log_level('info')
 
-## Modificação de parâmetros Epoch e adicionado "Picks"
-# Define time range (1 to labeled)
-# Only works up to 151s in record-[2012.07.19-11.24.02]
-tmin, tmax = -0., 1
+###############################################################################
+# Loading dataset
+# ---------------
+#
 
-# epochs = Epochs(raw, events, event_id, tmin=0, tmax=360.9, baseline=None)
-epochs = Epochs(raw, events, event_id, tmin, tmax,  proj=False, baseline=None, preload=True, verbose=False)
 
-# Extract data from Epochs object in (Trial, Channel, Sample) format
-epochs_data = epochs.get_data()
+# for i in range(n_subject):
+#     SSVEPExo()._get_single_subject_data(i + 1)
+dataset = SSVEPExo(sessions_per_subject=5)
+dataset.data_path(1, path="/home/lucas-c/workspace/databases/ssvep_exo")
+interval = dataset.interval
+paradigm = SSVEP(fmin=10, fmax=25, n_classes=3)
+paradigm_fb = FilterBankSSVEP(filters=None, n_classes=3)
 
-# Make a pipeline with riemannian geometry models
+# Classes are defined by the frequency of the stimulation, here we use
+# the first two frequencies of the dataset, 13 and 17 Hz.
+# The evaluation function uses a LabelEncoder, transforming them
+# to 0 and 1
 
-clf = make_pipeline(Covariances(), TangentSpace(metric='riemann'), LogisticRegression())
+freqs = paradigm.used_events(dataset)
 
-# Get labels
+##############################################################################
+# Create pipelines
+# ----------------
+#
+# Pipelines must be a dict of sklearn pipeline transformer.
+# The first pipeline uses Riemannian geometry, by building an extended
+# covariance matrices from the signal filtered around the considered
+# frequency and applying a logistic regression in the tangent plane.
+# The second pipeline relies on the above defined CCA classifier.
 
-labels = epochs.events[:, -1]
+pipelines_fb = {}
+pipelines_fb['RG + LogReg'] = make_pipeline(
+    ExtendedSSVEPSignal(),
+    Covariances(estimator='lwf'),
+    TangentSpace(),
+    LogisticRegression(solver='lbfgs', multi_class='auto'))
 
-# Call de FIT function to train the model
+##############################################################################
+# Evaluation
+# ----------
+#
+# We define the paradigm (SSVEP) and use the dataset available for it.
+# The evaluation will return a dataframe containing a single AUC score for
+# each subject / session of the dataset, and for each pipeline.
+#
+# Results are saved into the database, so that if you add a new pipeline, it
+# will not run again the evaluation unless a parameter has changed. Results can
+# be overwritten if necessary.
 
-clf.fit(epochs_data, labels)
+overwrite = False  # set to True if we want to overwrite cached results
 
-# Save the model with pickle
+# Filter bank processing, determine automatically the filter from the
+# stimulation frequency values of events.
+evaluation_fb = CrossSubjectEvaluation(paradigm=paradigm_fb,
+                                       datasets=dataset, overwrite=overwrite)
+results_fb = evaluation_fb.process(pipelines_fb)
 
-Trained_Model = pickle.dumps(clf)
+##############################################################################
+# Plot Results
+# ----------------
+#
+# Here we plot the results.
 
-# Get the next data in "real time" and predict the label ['resting-state': 'resting', '13 Hz': 'forward', '21 Hz': 'right', '17 Hz': 'left']
+fig, ax = plt.subplots(facecolor='white', figsize=[8, 4])
+sns.stripplot(data=results_fb, y='score', x='pipeline', ax=ax, jitter=True,
+              alpha=.5, zorder=1, palette="Set1")
+sns.pointplot(data=results_fb, y='score', x='pipeline', ax=ax,
+              zorder=1, palette="Set1")
+ax.set_ylabel('Accuracy')
+ax.set_ylim(0.1, 0.6)
+plt.savefig('ssvep.png')
+fig.show()
 
-Model = pickle.loads(Trained_Model)
-# Transpoes matriz 3d to put samples in first index
-epochs_data_transposed = epochs_data.transpose(2,1,0)
-# Predict all samples
-prediction = Model.predict(epochs_data_transposed)
-# Predict only labeled samples (use 1s of time range)
-prediction_labeled = Model.predict(epochs_data)
-
-# Tentativa de transformar as Epochs em matriz de covariancia para fazer o predict com dados de mesmo escopo
-# cov = Covariances().transform(epochs_data)
-# prediction = Model.predict(cov)
+print(results_fb)
